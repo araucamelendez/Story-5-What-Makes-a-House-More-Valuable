@@ -1,0 +1,536 @@
+---
+title: "Data Story 5: What Makes a House More Valuable?"
+author: "Arauca Melendez"
+format: html
+editor: visual
+---
+
+# Introduction
+
+Housing prices are influenced by many different characteristics, including the size of a property, its location, the quality of its construction, and the features available inside the home. Understanding how these characteristics relate to sale prices can help explain why some homes are valued higher than others.
+
+For this project, I will investigate the Ames, Iowa housing dataset. The dataset contains information about residential properties and their sale prices, along with details about the home's size, condition, neighborhood, garage, kitchen, and other features.
+
+The main research question for this analysis is:
+
+**What factors have the greatest influence on residential home sale prices, and how do individual home features contribute to property value?**
+
+I will use exploratory data analysis and multiple linear regression to examine the relationships between housing characteristics and sale prices. I will also use the `marginaleffects` package to better understand how selected features, such as garage capacity and kitchen quality, relate to predicted home values.
+
+Rather than focusing only on predicting prices, this project will use statistical modeling and visualizations to explain the relationships between different housing characteristics and the prices buyers pay for homes.
+
+## Loading packages
+
+```{r}
+# Load packages
+library(tidyverse)
+library(broom)
+library(marginaleffects)
+library(performance)
+library(scales)
+
+
+```
+### Importing the dataset
+```{r}
+housing <- read_csv(
+  "https://georgehagstrom.github.io/DATA608Fall2026/assignments/stories/data/train.csv"
+)
+
+glimpse(housing)
+```
+### Importing the data dictionary
+```{r}
+data_dictionary <- read_lines(
+  "https://georgehagstrom.github.io/DATA608Fall2026/assignments/stories/data/data_description.txt"
+)
+
+cat(data_dictionary[1:30], sep = "\n")
+```
+### Examining the dataset
+```{r}
+dim(housing)
+```
+```{r}
+head(housing)
+```
+```{r}
+summary(housing$SalePrice)
+```
+```{r}
+# Checking for missing values
+housing %>%
+  summarise(
+    across(
+      everything(),
+      ~ sum(is.na(.))
+    )
+  ) %>%
+  pivot_longer(
+    everything(),
+    names_to = "variable",
+    values_to = "missing_values"
+  ) %>%
+  filter(missing_values > 0) %>%
+  arrange(desc(missing_values))
+```
+
+## Data Preparation
+
+The original dataset contains 1,460 observations and 81 variables. Since not every variable is necessary for this analysis, I selected a smaller group of housing characteristics that may influence sale prices. These include overall quality, living area, lot size, basement size, year built, garage capacity, kitchen quality, neighborhood, and sale type.
+
+```{r}
+housing_clean <- housing %>%
+  select(
+    SalePrice,
+    OverallQual,
+    GrLivArea,
+    LotArea,
+    YearBuilt,
+    TotalBsmtSF,
+    GarageCars,
+    KitchenQual,
+    Neighborhood,
+    SaleType
+  ) %>%
+  drop_na()
+```
+
+```{r}
+dim(housing_clean)
+```
+```{r}
+colSums(is.na(housing_clean))
+```
+## Exploratory Data Analysis
+
+I began by examining the distribution of housing sale prices to understand the range of values in the dataset and identify whether the prices are evenly distributed.
+
+```{r}
+ggplot(housing_clean, aes(x = SalePrice)) +
+  geom_histogram(
+    bins = 30,
+    fill = "lightpink",
+    color = "white"
+  ) +
+  scale_x_continuous(labels = scales::dollar_format()) +
+  labs(
+    title = "Distribution of Housing Sale Prices",
+    x = "Sale Price",
+    y = "Number of Homes"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+# Exploring square footage and housing prices
+ggplot(
+  housing_clean,
+  aes(x = GrLivArea, y = SalePrice)
+) +
+  geom_point(alpha = 0.5, color = "deeppink") +
+  geom_smooth(method = "lm", color = "darkgreen") +
+  scale_y_continuous(labels = dollar_format()) +
+  labs(
+    title = "Living Area and Housing Sale Prices",
+    subtitle = "Relationship between above-ground living space and sale price",
+    x = "Above-Ground Living Area (Square Feet)",
+    y = "Sale Price"
+  ) +
+  theme_minimal()
+```
+
+## Multiple Linear Regression Model
+
+To examine the relationship between housing characteristics and sale prices, I developed a multiple linear regression model. This model considers several housing features simultaneously, allowing me to examine their individual
+relationships with sale price while accounting for other variables.
+
+```{r}
+housing_clean <- housing_clean %>%
+  mutate(
+    KitchenQual = factor(
+      KitchenQual,
+      levels = c("Fa", "TA", "Gd", "Ex")
+    ),
+    Neighborhood = factor(Neighborhood),
+    SaleType = factor(SaleType)
+  )
+```
+
+```{r}
+housing_model <- lm(
+  SalePrice ~ OverallQual +
+    GrLivArea +
+    LotArea +
+    YearBuilt +
+    TotalBsmtSF +
+    GarageCars +
+    KitchenQual +
+    Neighborhood +
+    SaleType,
+  data = housing_clean
+)
+
+summary(housing_model)
+```
+```{r}
+levels(housing_clean$KitchenQual)
+
+table(housing_clean$KitchenQual)
+```
+
+
+
+```{r}
+model_results <- broom::glance(housing_model)
+
+model_results %>%
+  select(
+    r.squared,
+    adj.r.squared,
+    sigma,
+    AIC
+  )
+```
+
+```{r}
+model_coefficients <- tidy(
+  housing_model,
+  conf.int = TRUE
+) %>%
+  filter(
+    term != "(Intercept)"
+  ) %>%
+  filter(
+    !str_detect(term, "Neighborhood|SaleType|KitchenQual")
+  )
+
+ggplot(
+  model_coefficients,
+  aes(
+    x = estimate,
+    y = reorder(term, estimate)
+  )
+) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    color = "gray50"
+  ) +
+  geom_point(
+    color = "deeppink",
+    size = 3
+  ) +
+  geom_errorbar(
+    aes(
+      xmin = conf.low,
+      xmax = conf.high
+    ),
+    width = 0.2
+  ) +
+  labs(
+    title = "Housing Characteristics and Sale Prices",
+    subtitle = "Estimated regression coefficients with 95% confidence intervals",
+    x = "Estimated Change in Sale Price ($)",
+    y = "Housing Characteristic"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+garage_predictions <- predictions(
+  housing_model,
+  newdata = datagrid(
+    model = housing_model,
+    GarageCars = 0:4
+  )
+)
+
+plot_predictions(
+  housing_model,
+  condition = "GarageCars"
+) +
+  labs(
+    title = "How Garage Capacity Relates to Home Values",
+    x = "Garage Capacity (Number of Cars)",
+    y = "Predicted Sale Price"
+  ) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_minimal()
+```
+
+```{r}
+plot_predictions(
+  housing_model,
+  condition = "KitchenQual"
+) +
+  labs(
+    title = "How Kitchen Quality Relates to Home Values",
+    x = "Kitchen Quality",
+    y = "Predicted Sale Price"
+  ) +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme_minimal()
+```
+
+## Initial Regression Findings
+
+The multiple linear regression model explained approximately 83.3% of the variation in housing sale prices, with an adjusted R-squared of 82.8%. This suggests that the selected housing characteristics provide a strong explanation of differences in home values.
+
+Overall quality and above-ground living area showed particularly strong positive relationships with sale price. The model estimated that each additional point in overall quality was associated with approximately $13,390 in additional sale value, while each additional square foot of living area was associated with approximately $43 in additional sale value, holding the other variables constant.
+
+Garage capacity also showed a positive relationship with sale price. Each additional car space was associated with approximately $11,300 in additional sale value.
+
+Kitchen quality produced an interesting finding. Homes with excellent kitchens had an estimated sale price approximately $52,780 higher than homes with fair kitchens, after accounting for the other variables. However, the differences for average and good kitchens were not statistically significant at the 5% level.
+
+Neighborhood was another important factor. Several neighborhoods, including NoRidge, StoneBr, and NridgHt, had significantly higher estimated sale prices than the reference neighborhood.
+
+Overall, the initial results suggest that home quality, living space, garage capacity, and location are important characteristics associated with residential housing prices.
+
+## Regression Diagnostics
+
+```{r}
+plot(housing_model, which = 1)
+```
+```{r}
+plot(housing_model, which = 2)
+```
+```{r}
+plot(housing_model, which = 3)
+```
+```{r}
+plot(housing_model, which = 4)
+```
+```{r}
+check_collinearity(housing_model)
+```
+```{r}
+influential_houses <- housing_clean %>%
+  mutate(
+    observation = row_number()
+  ) %>%
+  filter(observation %in% c(524, 692, 1299)) %>%
+  select(
+    observation,
+    SalePrice,
+    OverallQual,
+    GrLivArea,
+    LotArea,
+    YearBuilt,
+    TotalBsmtSF,
+    GarageCars,
+    Neighborhood
+  )
+
+influential_houses
+```
+
+```{r}
+model_log <- lm(
+  log(SalePrice) ~
+    OverallQual +
+    GrLivArea +
+    LotArea +
+    YearBuilt +
+    TotalBsmtSF +
+    GarageCars +
+    KitchenQual +
+    Neighborhood +
+    SaleType,
+  data = housing_clean
+)
+
+summary(model_log)
+```
+```{r}
+par(mfrow = c(2, 2))
+
+plot(model_log)
+
+par(mfrow = c(1, 1))
+```
+
+```{r}
+plot(model_log, which = 1)
+plot(model_log, which = 2)
+plot(model_log, which = 3)
+plot(model_log, which = 4)
+```
+```{r}
+broom::glance(housing_model) %>%
+  select(r.squared, adj.r.squared, sigma, AIC)
+
+broom::glance(model_log) %>%
+  select(r.squared, adj.r.squared, sigma, AIC)
+```
+```{r}
+# Residuals vs. Fitted
+plot(model_log, which = 1)
+
+# Normal Q-Q
+plot(model_log, which = 2)
+
+# Scale-Location
+plot(model_log, which = 3)
+
+# Cook's Distance
+plot(model_log, which = 4)
+```
+
+```{r}
+cooks_values <- cooks.distance(model_log)
+
+influential_log <- tibble(
+  observation = seq_along(cooks_values),
+  cooks_distance = cooks_values
+) %>%
+  arrange(desc(cooks_distance)) %>%
+  slice_head(n = 10)
+
+influential_log
+```
+
+## Comparing the Original and Log-Transformed Models
+
+After reviewing the diagnostic plots from the original regression model, I decided to create a second model using a logarithmic transformation of SalePrice. The original model showed evidence of nonconstant residual variance, deviations from normality, and several potentially influential observations.
+
+The log-transformed model explained approximately 85.6% of the variation in log-transformed sale prices, compared with 83.3% in the original model. The adjusted R-squared also increased from 82.8% to 85.1%. These results suggest that the transformed model provides a stronger explanation of variation on the log-price scale.
+
+The transformed model also produced some interesting changes in the coefficients. Overall quality, living area, garage capacity, and kitchen quality remained important characteristics associated with sale prices. In particular, all three kitchen-quality categories above Fair were statistically significant in the transformed model, whereas only Excellent kitchen quality was significant in the original model.
+
+Overall, the log transformation provides an alternative way to examine housing prices and may help address some of the issues identified in the original regression diagnostics. The diagnostic plots for the transformed model will be reviewed to determine whether the transformation improves the model assumptions.
+
+## Diagnostic Assessment of the Log-Transformed Model
+
+After fitting the log-transformed regression model, I reviewed the four diagnostic plots to evaluate the model assumptions. Overall, the model captures the general relationships between the housing characteristics and log sale prices, but some concerns remain.
+
+The Residuals vs. Fitted plot shows that most residuals are centered around zero, suggesting that the model captures the general pattern in the data. However, slight curvature in the smoothing line suggests that some relationships may not be completely linear. The Q-Q plot shows substantial deviations from the reference line, particularly in the lower tail, indicating that the residuals are not normally distributed. The Scale-Location plot also suggests possible heteroscedasticity, meaning that the residual variance is not completely constant across fitted values.
+
+Finally, Cook's Distance identifies observation 1299 as particularly influential, with observations 524 and 1132 also worth investigating. These observations may have a noticeable effect on the model estimates. However, I would not automatically remove them because unusual properties may represent legitimate housing sales rather than data errors.
+
+Overall, the log transformation provides another way to examine housing prices, but it does not resolve every regression assumption concern. These limitations should be considered when interpreting the model's results.
+
+```{r}
+influential_houses <- housing_clean %>%
+  mutate(observation = row_number()) %>%
+  filter(observation %in% c(31, 524, 1132, 1299)) %>%
+  select(
+    observation,
+    SalePrice,
+    OverallQual,
+    GrLivArea,
+    LotArea,
+    YearBuilt,
+    TotalBsmtSF,
+    GarageCars,
+    Neighborhood
+  )
+
+influential_houses
+```
+```{r}
+cooks_values <- cooks.distance(model_log)
+
+influential_cooks <- tibble(
+  observation = seq_along(cooks_values),
+  cooks_distance = cooks_values
+) %>%
+  filter(observation %in% c(31, 524, 1132, 1299))
+
+influential_cooks
+```
+```{r}
+# Creating a temporary dataset without observation 1299
+housing_sensitivity <- housing_clean %>%
+  mutate(observation = row_number()) %>%
+  filter(observation != 1299) %>%
+  select(-observation)
+
+# Refitting the log-transformed model
+model_log_no1299 <- lm(
+  log(SalePrice) ~ OverallQual + GrLivArea + LotArea + YearBuilt +
+    TotalBsmtSF + GarageCars + KitchenQual + Neighborhood + SaleType,
+  data = housing_sensitivity
+)
+
+# Comparing the two models
+model_comparison <- bind_rows(
+  Original = glance(model_log),
+  Without_1299 = glance(model_log_no1299),
+  .id = "model"
+) %>%
+  select(model, r.squared, adj.r.squared, sigma)
+
+model_comparison
+```
+
+```{r}
+coefficient_comparison <- bind_rows(
+  tidy(model_log) %>%
+    mutate(model = "Original"),
+  tidy(model_log_no1299) %>%
+    mutate(model = "Without observation 1299")
+) %>%
+  filter(term %in% c(
+    "OverallQual",
+    "GrLivArea",
+    "LotArea",
+    "YearBuilt",
+    "TotalBsmtSF",
+    "GarageCars"
+  )) %>%
+  select(term, model, estimate)
+
+coefficient_comparison
+```
+
+
+## Sensitivity Analysis: Influence of Observation 1299
+
+Because observation 1299 had an unusually high Cook's Distance, I conducted a sensitivity analysis to determine how much it influenced the regression results. I temporarily refitted the log-transformed model without this observation and compared the results with the original model.
+
+The adjusted R-squared increased from 85.1% to 87.0%, while the residual standard error decreased from 0.154 to 0.144. Several coefficient estimates also changed, particularly those for LotArea and TotalBsmtSF. However, all six numerical predictors retained positive coefficients, suggesting that the general direction of their relationships with sale prices remained consistent.
+
+These findings indicate that observation 1299 has a meaningful influence on the model, particularly when estimating the relationships between property size and sale price. However, the observation was not removed from the primary analysis because there is no evidence that it represents an incorrect record. The sensitivity analysis instead demonstrates that the model's results should be interpreted with some caution.
+
+
+```{r}
+par(mfrow = c(2, 2))
+plot(model_log_no1299)
+par(mfrow = c(1, 1))
+```
+
+### Diagnostic Assessment of the Sensitivity Model
+
+After temporarily excluding observation 1299, I reviewed the diagnostic plots to determine whether the model assumptions improved. Although the model's adjusted R-squared increased, the diagnostic plots continued to show some limitations.
+
+The Residuals vs. Fitted plot showed residuals generally distributed around zero, although some unusual observations remained. The Normal Q-Q plot continued to show substantial deviations from the reference line, particularly in the lower tail, suggesting that the residuals were not normally distributed. The Scale-Location plot also indicated possible heteroscedasticity because the residual spread was not completely consistent across fitted values.
+
+The Residuals vs. Leverage plot identified several observations worth investigating, including observations 524, 943, and 1132. These results suggest that removing observation 1299 did not completely resolve the model's diagnostic concerns.
+
+Overall, the sensitivity analysis showed that observation 1299 influenced the original model, but other unusual observations also affected the regression diagnostics. The results reinforce the importance of interpreting the regression estimates cautiously rather than relying on model fit statistics alone.
+
+## Key Findings
+
+The regression analysis identified several housing characteristics associated with residential sale prices. Overall quality had a positive relationship with sale price, meaning that homes with higher overall quality ratings tended to sell for more. Living area, lot area, year built, basement size, and garage capacity also had positive relationships with sale prices.
+
+Kitchen quality and neighborhood were also important factors. In the log-transformed model, homes with better kitchen quality ratings generally had higher estimated sale prices than homes in the reference category. Several neighborhoods also had significantly different estimated sale prices after accounting for the other variables in the model.
+
+The original log-transformed model explained approximately 85.6% of the variation in log sale prices. However, diagnostic testing revealed concerns involving residual normality, constant variance, and influential observations. The sensitivity analysis showed that observation 1299 had a noticeable effect on the model's estimates, although removing it did not eliminate all diagnostic concerns.
+
+## Limitations
+
+There are several limitations to this analysis. First, the regression model identifies associations rather than proving that individual housing characteristics directly cause higher sale prices. Other factors not included in the model may also influence property values.
+
+Second, some regression assumptions were not fully satisfied. The diagnostic plots suggested non-normal residuals, possible heteroscedasticity, and unusual observations that may influence the estimated coefficients. Although a log transformation was applied to sale prices, these issues were not completely resolved.
+
+Finally, the analysis used a selected group of housing characteristics. Other variables, such as property condition, exterior quality, renovations, and additional neighborhood characteristics, could provide further insight into differences in residential sale prices.
+
+## Conclusion
+
+The purpose of this project was to investigate which housing characteristics have the strongest relationships with residential sale prices. The analysis found that overall quality, living area, garage capacity, basement size, lot area, and year built were positively associated with sale prices. Kitchen quality and neighborhood differences also contributed to explaining variation in home values.
+
+The regression model explained a substantial portion of the variation in log sale prices, demonstrating that property characteristics can provide useful information when examining housing values. However, the diagnostic results and sensitivity analysis showed that unusual observations and regression assumption concerns should be considered when interpreting the findings.
+
+Overall, this project demonstrates how exploratory data analysis, visualization, and multiple linear regression can be used together to investigate housing prices. It also highlights the importance of evaluating model assumptions and investigating influential observations rather than relying on regression results alone.
